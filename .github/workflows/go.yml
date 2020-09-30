@@ -21,6 +21,11 @@ jobs:
 
     - name: Check out code into the Go module directory
       uses: actions/checkout@v2
+    
+    - name: Workaround for the empty username issue
+      run: |
+        mkdir -p /home/runner/go/src/github.com/Percona-Lab/go-tpcc
+        cp -Rv /home/runner/work/go-tpcc/go-tpcc /home/runner/go/src/github.com/Percona-Lab
 
     - name: Get dependencies
       run: |

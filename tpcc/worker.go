@@ -2,9 +2,9 @@ package tpcc
 
 import (
 	"context"
-	"mongo-tpcc/databases"
-	"mongo-tpcc/executor"
-	"mongo-tpcc/helpers"
+	"github.com/Percona-Lab/go-tpcc/databases"
+	"github.com/Percona-Lab/go-tpcc/executor"
+	"github.com/Percona-Lab/go-tpcc/helpers"
 	"sync"
 	"time"
 )

@@ -18,7 +18,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/spf13/cobra"
-	"mongo-tpcc/tpcc"
+	"github.com/Percona-Lab/go-tpcc/tpcc"
 )
 
 

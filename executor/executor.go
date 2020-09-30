@@ -2,7 +2,7 @@ package executor
 
 import (
 	"context"
-	"mongo-tpcc/databases"
+	"github.com/Percona-Lab/go-tpcc/databases"
 	"time"
 )
 

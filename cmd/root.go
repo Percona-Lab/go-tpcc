@@ -26,7 +26,7 @@ import (
 var cfgFile string
 
 var rootCmd = &cobra.Command{
-	Use:   "mongo-tpcc",
+	Use:   "go-tpcc",
 	Short: "TPC-C implementation for various databases. Currently only MongoDB is supported",
 }
 

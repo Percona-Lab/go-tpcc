@@ -2,7 +2,7 @@ package tpcc
 
 import (
 	"math/rand"
-	"mongo-tpcc/helpers"
+	"github.com/Percona-Lab/go-tpcc/helpers"
 	"time"
 )
 

@@ -3,9 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
-	_ "mongo-tpcc/helpers"
-	"mongo-tpcc/tpcc"
-	_ "mongo-tpcc/tpcc"
+	"github.com/Percona-Lab/go-tpcc/tpcc"
 	"sync"
 	"time"
 

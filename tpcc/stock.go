@@ -1,6 +1,6 @@
 package tpcc
 
-import "mongo-tpcc/helpers"
+import "github.com/Percona-Lab/go-tpcc/helpers"
 
 type Stock struct {
 	S_I_ID int `bson:"S_I_ID"`

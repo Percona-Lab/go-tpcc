@@ -14,7 +14,7 @@
 
 package main
 
-import "mongo-tpcc/cmd"
+import "github.com/Percona-Lab/go-tpcc/cmd"
 
 func main() {
 	cmd.Execute()

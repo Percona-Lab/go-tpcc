@@ -60,6 +60,10 @@ jobs:
         asset_name: go-tpcc
         asset_content_type: application/x-executable
 
+    - name: Hack for getting the tag name in sane format
+      id: get_version
+      run: echo ::set-output name=VERSION::${GITHUB_REF#refs/tags/}
+
     - name: Set up QEMU
       uses: docker/setup-qemu-action@v1
     - name: Set up Docker Buildx
@@ -79,6 +83,6 @@ jobs:
         push: true
         tags: |
           Percona-Lab/go-tpcc:latest
-          Percona-Lab/go-tpcc:${{ github.ref }}
+          Percona-Lab/go-tpcc:${{ steps.get_version.outputs.VERSION }}
           ghcr.io/Percona-Lab/go-tpcc:latest
-          ghcr.io/Percona-Lab/go-tpcc:${{ github.ref }}
+          ghcr.io/Percona-Lab/go-tpcc:${{ steps.get_version.outputs.VERSION }}

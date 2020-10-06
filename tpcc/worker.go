@@ -19,6 +19,7 @@ type Configuration struct {
 	ReportInterval int
 	WareHouses int
 	ScaleFactor float64
+	PercentFail int
 }
 
 
@@ -30,7 +31,7 @@ type Worker struct {
 	ctx context.Context
 	wg *sync.WaitGroup
 	c chan Transaction
-} 
+}
 
 func NewWorker(ctx context.Context, configuration *Configuration, wg *sync.WaitGroup, c chan Transaction, threadId int) (*Worker, error) {
 
@@ -43,7 +44,7 @@ func NewWorker(ctx context.Context, configuration *Configuration, wg *sync.WaitG
 		INITIAL_NEW_ORDERS_PER_DISTRICT,
 	)
 
-	d, err := databases.NewDb(configuration.URI, configuration.DBName, configuration.Transactions, false)
+	d, err := databases.NewMongoDb(configuration.URI, configuration.DBName, configuration.Transactions, false)
 	if err != nil {
 		panic(err)
 	}
@@ -102,16 +103,17 @@ type Transaction struct {
 	ThreadId int
 	Type TransactionType
 	Failed bool
+	Time float64
 }
 
 func (w *Worker) Execute() {
 	defer w.wg.Done()
-
 	for {
 		select {
 		case <- w.ctx.Done():
 			return
 		default:
+			t := time.Now()
 			var status error
 			trx := Transaction{
 				ThreadId: w.threadId,
@@ -134,12 +136,15 @@ func (w *Worker) Execute() {
 				status = w.DoNewOrder()
 			}
 
-			failed := false
-			if status != nil {
-				failed = true
-			}
 
-			trx.Failed = failed
+			trx.Time = float64(time.Now().Sub(t).Nanoseconds())/1e6
+
+			trx.Failed = false
+			if status != nil {
+				//fmt.Println(trx.Type)
+				//fmt.Println(status)
+				trx.Failed = true
+			}
 
 			w.c <- trx
 		}
@@ -222,7 +227,8 @@ func (w *Worker) DoNewOrder() error {
 	olCnt := helpers.RandInt(MIN_OL_CNT, MAX_OL_CNT)
 
 	rollback := false
-	if helpers.RandInt(1,100) == 42 {
+
+	if helpers.RandInt(1,100) < w.cfg.PercentFail  {
 		rollback = true
 	}
 

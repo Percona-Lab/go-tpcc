@@ -2,27 +2,16 @@ package tpcc
 
 import(
 	"github.com/Percona-Lab/go-tpcc/helpers"
+	"github.com/Percona-Lab/go-tpcc/tpcc/models"
 )
 
-type District struct {
-	D_ID        int `bson:"D_ID"`
-	D_W_ID      int  `bson:"D_W_ID"`
-	D_NAME      string `bson:"D_NAME"`
-	D_STREET_1  string `bson:"D_STREET_1"`
-	D_STREET_2  string `bson:"D_STREET_2"`
-	D_CITY      string `bson:"D_CITY"`
-	D_STATE     string `bson:"D_STATE"`
-	D_ZIP       string `bson:"D_ZIP"`
-	D_TAX       float64 `bson:"D_TAX"`
-	D_YTD       float64 `bson:"D_YTD"`
-	D_NEXT_O_ID int `bson:"D_NEXT_O_ID"`
-}
 
-func (w *Worker) generateDistrict(dId int, dWId int, dNextOId int) District {
+
+func (w *Worker) generateDistrict(dId int, dWId int, dNextOId int) models.District {
 
 	address_ := w.generateRandomAddress()
 
-	return District{
+	return models.District{
 		D_ID:        dId,
 		D_W_ID:      dWId,
 		D_NAME:      helpers.RandString(helpers.RandInt(MIN_NAME, MAX_NAME)),

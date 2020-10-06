@@ -3,6 +3,7 @@ package databases
 import (
 	"context"
 	"fmt"
+	"github.com/Percona-Lab/go-tpcc/tpcc/models"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -17,9 +18,11 @@ type Database struct {
 	Aggregate bool
 	findAndModify bool
 	transactions bool
+	ctx mongo.SessionContext
 }
 
-func NewDb(uri string, dbname string, transactions bool, findandmodify bool) (*Database, error){
+
+func NewMongoDb(uri string, dbname string, transactions bool, findandmodify bool) (*Database, error){
 	//mongodb://localhost:27017
 	//todo auth
 
@@ -41,13 +44,52 @@ func NewDb(uri string, dbname string, transactions bool, findandmodify bool) (*D
 		return nil, err
 	}
 
+
+	session, err := client.StartSession()
+
+	if err != nil {
+		return nil, err
+	}
+
+
 	return &Database{
 		Client: client,
 		C: client.Database(dbname),
 		Aggregate: false,
 		transactions: transactions,
-		findAndModify: findandmodify,
+		findAndModify: false,
+		ctx: mongo.NewSessionContext(context.Background(), session),
 	}, nil
+}
+
+func (db *Database) StartTrx() error {
+	sess :=  mongo.SessionFromContext(db.ctx)
+	err := sess.StartTransaction()
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (db *Database) CommitTrx() error {
+	sess :=  mongo.SessionFromContext(db.ctx)
+	err := sess.CommitTransaction(db.ctx)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (db *Database) RollbackTrx() error {
+	sess :=  mongo.SessionFromContext(db.ctx)
+	err := sess.AbortTransaction(db.ctx)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (db *Database) CreateIndexes() error {
@@ -205,7 +247,7 @@ func (db *Database) CreateIndexes() error {
 
 func (db *Database) InsertOne(collectionName string, d interface{}) error {
 	collection := db.C.Collection(collectionName)
-	_, err := collection.InsertOne(context.TODO(), d)
+	_, err := collection.InsertOne(db.ctx, d)
 	if err != nil {
 		return err
 	}
@@ -215,7 +257,7 @@ func (db *Database) InsertOne(collectionName string, d interface{}) error {
 
 func (db *Database) InsertBatch(collectionName string, d []interface{}) error {
 	collection := db.C.Collection(collectionName)
-	_, err := collection.InsertMany(context.TODO(), d)
+	_, err := collection.InsertMany(db.ctx, d)
 	if err != nil {
 		return err
 	}
@@ -242,6 +284,16 @@ func (db *Database) DoTrxRetries(fn func(ctx context.Context) error , retries in
 			}
 		}
 
+		//ctxs := mongo.NewSessionContext(context.Background(), s)
+
+		//e := fn(ctxs)
+
+		//if e != nil {
+		//	if db.transactions {
+			//
+			//}
+		//}
+
 		err = mongo.WithSession(context.Background(), s, func(sc mongo.SessionContext) error {
 			e := fn(sc)
 
@@ -266,55 +318,293 @@ func (db *Database) DoTrxRetries(fn func(ctx context.Context) error , retries in
 	return err
 }
 
-
-func (db *Database) DoStockLevelTrx(ctx context.Context, wId int, dId int, threshold int) error {
-
-	collection := db.C.Collection("DISTRICT")
-	var p bson.M
-
-	var query = &bson.D{
-			{"D_W_ID", wId,},
-			{"D_ID", dId,},
+// Get District using warehouseId and districtId and return pointer to models.District or error instead.
+func (db *Database) IncrementDistrictOrderId(warehouseId int, districtId int) (error) {
+	filter := bson.D{
+		{"D_ID", districtId},
+		{"D_W_ID", warehouseId},
 	}
 
-	err := collection.FindOne(
-		ctx,
-		query,
-		options.FindOne().SetProjection(bson.D{
-			{"_id", 0},
+	update := bson.D{
+		{"$inc", bson.D{
 			{"D_NEXT_O_ID", 1},
-		}).SetComment("STOCK_LEVEL")).Decode(&p)
+		}},
+	}
+
+	u, err := db.C.Collection("DISTRICT").UpdateOne(db.ctx, filter, update, nil)
+
+	if err != nil {
+			return err
+		}
+
+	if u.MatchedCount == 0 {
+			return fmt.Errorf("update of District document failed")
+		}
+
+	return nil
+}
+
+
+// It also deletes new order, as MongoDB can do that findAndModify is set to 0
+func (db *Database) GetNewOrder(warehouseId int, districtId int) (*models.NewOrder, error) {
+	var NewOrder models.NewOrder
+	var err error
+
+	newOrderProjection := bson.D{
+		{"_id", 0},
+		{"NO_D_ID", 1},
+		{"NO_W_ID", 1},
+		{"NO_O_ID", 1},
+	}
+
+	filter := bson.D{
+		{"NO_D_ID", districtId},
+		{"NO_W_ID", warehouseId},
+	}
+
+	newOrderSort := bson.D{{"NO_O_ID", 1}}
+
+	if db.findAndModify {
+		err = db.C.Collection("NEW_ORDER").FindOneAndDelete(
+			db.ctx,
+			filter,
+			options.FindOneAndDelete().SetSort(newOrderSort).SetProjection(newOrderProjection),
+		).Decode(&NewOrder)
+
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		err = db.C.Collection("NEW_ORDER").FindOne(
+			db.ctx,
+			filter,
+			options.FindOne().SetProjection(newOrderProjection).SetSort(newOrderSort),
+		).Decode(&NewOrder)
+	}
+
+	return &NewOrder, nil
+}
+
+func (db *Database) DeleteNewOrder(orderId int, warehouseId int, districtId int) error {
+	var err error
+
+	filter := bson.D{
+		{"NO_O_ID", orderId},
+		{"NO_D_ID", districtId},
+		{"NO_W_ID", warehouseId},
+	}
+
+	if db.findAndModify {
+		return nil
+	}
+
+	r,err := db.C.Collection("NEW_ORDER").DeleteOne(db.ctx, filter, nil)
 
 	if err != nil {
 		return err
 	}
 
-	orderId := int(p["D_NEXT_O_ID"].(int32))
-	collection = db.C.Collection("ORDERS")
+	if r.DeletedCount == 0 {
+		return fmt.Errorf("no documents found")
+	}
 
-	cursor, err := collection.Find(ctx,
+	return nil
+}
+
+func (db *Database) GetCustomer(customerId int, warehouseId int, districtId int) (*models.Customer, error) {
+	var err error
+
+	var c models.Customer
+
+	err = db.C.Collection("CUSTOMER").FindOne(db.ctx, bson.D{
+		{"C_ID", customerId},
+		{"C_D_ID", districtId},
+		{"C_W_ID", warehouseId},
+	}).Decode(&c)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &c, nil
+}
+
+// GetCId
+func (db *Database) GetCustomerIdOrder (orderId int, warehouseId int, districtId int) (int, error) {
+	var err error
+
+	filter := bson.D{
+		{"O_ID", orderId},
+		{"O_D_ID", districtId},
+		{"O_W_ID", warehouseId},
+	}
+
+	var doc bson.M
+	err = db.C.Collection("ORDERS").FindOne(
+		db.ctx,
+		filter,
+		options.FindOne().SetProjection(bson.D{
+			{"_id", 0},
+			{"O_C_ID", 1},
+		})).Decode(&doc)
+
+	if err != nil {
+		return 0, err
+	}
+
+	return int(doc["O_C_ID"].(int32)), nil
+}
+
+func (db *Database) UpdateOrders(orderId int, warehouseId int, districtId int, oCarrierId int, deliveryDate time.Time) error {
+	var err error
+
+	filter := bson.D{
+		{"O_ID", orderId},
+		{"O_D_ID", districtId},
+		{"O_W_ID", warehouseId},
+	}
+
+	r,err := db.C.Collection("ORDERS").UpdateOne(db.ctx,
+		filter,
 		bson.D{
-			{"O_W_ID", wId},
-			{"O_D_ID", dId},
+		{"$set", bson.D{
+			{"O_CARRIER_ID", oCarrierId},
+			{"ORDER_LINE.$[].OL_DELIVERY_D", deliveryDate},
+		}},
+		})
+
+	if err != nil {
+		return err
+	}
+
+	if r.MatchedCount == 0 {
+		return fmt.Errorf("UpdateOrders: no documents matched")
+	}
+
+	return nil
+}
+
+
+func (db *Database) sumOLAmount(orderId int, warehouseId int, districtId int) (float64, error) {
+	var err error
+
+	match := bson.D{
+		{"$match", bson.D{
+			{"O_ID", orderId},
+			{"O_D_ID", districtId},
+			{"O_W_ID", warehouseId},
+		}},
+	}
+
+	unwind := bson.D{
+		{"$unwind", "$ORDER_LINE"},
+	}
+
+	group := bson.D{
+		{"$group", bson.D{
+			{"_id", "OL_O_ID"},
+			{"sumOlAmount", bson.D{
+				{"$sum", "$ORDER_LINE.OL_AMOUNT"},
+			}},
+		}},
+	}
+
+	cursor, err := db.C.Collection("ORDERS").Aggregate(db.ctx,mongo.Pipeline{match, unwind, group})
+	defer cursor.Close(db.ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	cursor.Next(db.ctx)
+
+	var agg bson.M
+	err = cursor.Decode(&agg)
+	if err != nil {
+		return 0, err
+	}
+
+	return float64(agg["sumOlAmount"].(float64)), nil
+
+}
+
+func (db *Database) UpdateCustomer(customerId int, warehouseId int, districtId int, sumOlTotal float64) error {
+	var err error
+
+	r, err := db.C.Collection("CUSTOMER").UpdateOne(db.ctx,
+		bson.D{
+			{"C_ID", customerId},
+			{"C_D_ID", districtId},
+			{"C_W_ID", warehouseId},
+		},
+		bson.D{
+			{"$inc", bson.D{
+				{"C_BALANCE", sumOlTotal},
+			}},
+		},
+		nil,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	if r.MatchedCount == 0 {
+		return fmt.Errorf("no matched documents")
+	}
+
+	return nil
+}
+
+
+func (db *Database) GetNextOrderId(warehouseId int, districtId int) (int, error) {
+
+
+	var oid bson.M
+	var query = &bson.D{
+		{"D_W_ID", warehouseId},
+		{"D_ID", districtId},
+	}
+
+	err := db.C.Collection("DISTRICT").FindOne(
+		db.ctx,
+		query,
+		options.FindOne().SetProjection(bson.D{
+			{"_id", 0},
+			{"D_NEXT_O_ID", 1},
+		}).SetComment("STOCK_LEVEL")).Decode(&oid)
+
+	if err != nil {
+		return 0, err
+	}
+
+	return int(oid["D_NEXT_O_ID"].(int32)), nil
+}
+
+func (db *Database) GetStockCount(orderIdLt int, orderIdGt int, threshold int, warehouseId int, districtId int) (int64, error) {
+
+	cursor, err := db.C.Collection("ORDERS").Find(db.ctx,
+		bson.D{
+			{"O_W_ID", warehouseId},
+			{"O_D_ID", districtId},
 			{"O_ID", bson.D{
-				{"$lt", orderId},
-				{"$gte", orderId - 20},
+				{"$lt", orderIdLt},
+				{"$gte", orderIdGt},
 			}},
 		}, options.Find().SetProjection(bson.D{
 			{"ORDER_LINE.OL_I_ID", 1},
 		}).SetComment("STOCK_LEVEL"))
 
 	if err != nil {
-		return err
+		return 0, err
 	}
 
-	defer cursor.Close(ctx)
+	defer cursor.Close(db.ctx)
 	var orderIds []int32
 
-	for cursor.Next(ctx) {
+	for cursor.Next(db.ctx) {
 		var order bson.M
 		if err = cursor.Decode(&order); err != nil {
-			return err
+			return 0, err
 		}
 
 		for _, value := range order["ORDER_LINE"].(primitive.A) {
@@ -322,8 +612,8 @@ func (db *Database) DoStockLevelTrx(ctx context.Context, wId int, dId int, thres
 		}
 	}
 
-	_, err = db.C.Collection("STOCK").CountDocuments(ctx, bson.D{
-		{"S_W_ID", wId},
+	c, err := db.C.Collection("STOCK").CountDocuments(db.ctx, bson.D{
+		{"S_W_ID", warehouseId},
 		{"S_I_ID", bson.D{
 			{"$in", orderIds},
 		}},
@@ -333,273 +623,142 @@ func (db *Database) DoStockLevelTrx(ctx context.Context, wId int, dId int, thres
 	})
 
 	if err != nil {
-		return err
+		//fmt.Println(bson.D{
+		//	{"O_W_ID", warehouseId},
+		//	{"O_D_ID", districtId},
+		//	{"O_ID", bson.D{
+		//		{"$lt", orderIdLt},
+		//		{"$gte", orderIdGt},
+		//	}},
+		//})
+		//fmt.Println(orderIds)
+		//panic("here")
+		return 0, err
 	}
 
-	return nil
+	return c, nil
 }
-func (db *Database) DoDelivery(ctx context.Context, wId int, oCarrierId int, olDeliveryD time.Time, dId int) error {
-	var no bson.M
-	newOrder := bson.D{
-		{"NO_D_ID", dId},
-		{"NO_W_ID", wId},
-	}
 
-	newOrderProjection := bson.D{
-		{"_id", 0},
-		{"NO_D_ID", 1},
-		{"NO_W_ID", 1},
-		{"NO_O_ID", 1},
-	}
+func (db *Database) GetCustomerById(customerId int, warehouseId int, districtId int) (*models.Customer, error) {
 
-	newOrderSort := bson.D{{"NO_O_ID", 1}}
 	var err error
+	var customer models.Customer
 
-	if db.findAndModify {
-		err = db.C.Collection("NEW_ORDER").FindOneAndDelete(
-			ctx,
-			newOrder,
-			options.FindOneAndDelete().SetSort(newOrderSort).SetProjection(newOrderProjection),
-		).Decode(&no)
-
-		if err != nil {
-			return err
-		}
-	} else {
-		err = db.C.Collection("NEW_ORDER").FindOne(
-			ctx,
-			newOrder,
-			options.FindOne().SetProjection(newOrderProjection).SetSort(newOrderSort),
-		).Decode(&no)
-
-		if err != nil {
-			return err
-		}
+	projection := bson.D{
+		{"_id", 0},
+		{"C_ID", 1},
+		{"C_FIRST", 1},
+		{"C_MIDDLE", 1},
+		{"C_LAST", 1},
+		{"C_BALANCE", 1},
 	}
 
-	if len(no) == 0 {
-		return fmt.Errorf("No new order found")
-	}
-
-	orderId := int(no["NO_O_ID"].(int32))
-
-	orderQuery := bson.D{
-		{"O_ID", orderId},
-		{"O_D_ID", dId},
-		{"O_W_ID", wId},
-	}
-
-	var order bson.M
-
-	if db.findAndModify {
-		err = db.C.Collection("ORDERS").FindOneAndUpdate(ctx, orderQuery,
-			bson.D{
-				{"$set", bson.D{
-					{"O_CARRIER_ID", oCarrierId},
-					{"ORDER_LINE.$[].OL_DELIVERY_D", olDeliveryD},
-				}},
-			},
-			nil,
-			).Decode(&order)
-
-		if err != nil {
-			return err
-		}
-	} else {
-		err = db.C.Collection("ORDERS").FindOne(ctx, orderQuery).Decode(&order)
-
-		if err != nil {
-			return err
-		}
-	}
-
-	customerId := order["O_C_ID"]
-
-	//if denormalize
-	orderLineTotal := float64(0)
-	for _, v := range order["ORDER_LINE"].(primitive.A) {
-		orderLineTotal += v.(primitive.M)["OL_AMOUNT"].(float64)
-	}
-
-	if ! db.findAndModify {
-		_, err = db.C.Collection("ORDERS").UpdateOne(ctx,
-			bson.D {
-				{"_id", order["_id"]},
-			},
-			bson.D{
-				{"$set", bson.D{
-					{"O_CARRIER_ID", oCarrierId},
-					{"ORDER_LINE.$[].OL_DELIVERY_D", olDeliveryD},
-				}},
-			},
-			nil,
-			)
-
-		if err != nil {
-			return err
-		}
-	}
-
-	_, err = db.C.Collection("CUSTOMER").UpdateOne(ctx,
-		bson.D{
-			{"C_ID", customerId},
-			{"C_D_ID", dId},
-			{"C_W_ID", wId},
-		},
-		bson.D{
-			{"$inc", bson.D{
-				{"C_BALANCE", orderLineTotal},
-			}},
-		},
-		nil,
-		)
+	err = db.C.Collection("CUSTOMER").FindOne(db.ctx, bson.D{
+		{"C_W_ID", warehouseId},
+		{"C_D_ID", districtId},
+		{"C_ID", customerId},
+	}, options.FindOne().SetComment("ORDER_STATUS").SetProjection(projection)).Decode(&customer)
 
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	if ! db.findAndModify {
-		_,err = db.C.Collection("NEW_ORDER").DeleteOne(ctx, no)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	return &customer, nil
 }
 
-func (db *Database) DoOrderStatus(ctx context.Context, wId int, dId int, cId int, cLast string) error {
+func (db *Database) GetCustomerByName(name string, warehouseId int, districtId int) (*models.Customer, error) {
 
-	var customer bson.M
-	var err error
+	var customer models.Customer
 
-	if cId > 0 {
-		err = db.C.Collection("CUSTOMER").FindOne(ctx, bson.D{
-			{"C_W_ID", wId},
-			{"C_D_ID", dId},
-			{"C_ID", cId},
-		}, options.FindOne().SetComment("ORDER_STATUS").SetProjection(bson.D{
-			{"_id", 0},
-			{"C_ID", 1},
-			{"C_FIRST", 1},
-			{"C_MIDDLE", 1},
-			{"C_LAST", 1},
-			{"C_BALANCE", 1},
-		})).Decode(&customer)
-
-		if err != nil {
-			return err
-		}
-
-		if len(customer) == 0 {
-			return fmt.Errorf("No customer found")
-		}
-	} else {
-		cursor, err := db.C.Collection("CUSTOMER").Find(ctx, bson.D{
-			{"C_W_ID", wId},
-			{"C_D_ID", dId},
-			{"C_LAST", cLast},
-		}, options.Find().SetComment("ORDER_STATUS").SetProjection(bson.D{
-			{"_id", 0},
-			{"C_ID", 1},
-			{"C_FIRST", 1},
-			{"C_MIDDLE", 1},
-			{"C_LAST", 1},
-			{"C_BALANCE", 1},
-		}))
-
-		if err != nil {
-			return err
-		}
-
-		var customers []bson.M
-		err = cursor.All(ctx, &customers)
-
-
-		if err != nil {
-			return err
-		}
-		if len(customers) == 0 {
-			return fmt.Errorf("No customer found")
-		}
-
-		i_ := int((len(customers) - 1) / 2)
-		customer = customers[i_]
-		cId = int(customer["C_ID"].(int32))
+	projection := bson.D{
+		{"_id", 0},
+		{"C_ID", 1},
+		{"C_FIRST", 1},
+		{"C_MIDDLE", 1},
+		{"C_LAST", 1},
+		{"C_BALANCE", 1},
 	}
 
-	_, err = db.C.Collection("ORDERS").Find(ctx, bson.D{
-		{"O_W_ID", wId},
-		{"O_D_ID", dId},
-		{"O_C_ID", cId},
-	},
-	options.Find().SetProjection(bson.D{
+	cursor, err := db.C.Collection("CUSTOMER").Find(db.ctx, bson.D{
+		{"C_W_ID", warehouseId},
+		{"C_D_ID", districtId},
+		{"C_LAST", name},
+	}, options.Find().SetProjection(projection))
+
+	defer cursor.Close(db.ctx)
+
+	if err != nil {
+		return nil, err
+	}
+
+	var customers []models.Customer
+	err = cursor.All(db.ctx, &customers)
+
+	if err != nil {
+		return nil, err
+	}
+	if len(customers) == 0 {
+		return nil, fmt.Errorf("No customer found")
+	}
+
+	i_ := int((len(customers) - 1) / 2)
+
+	customer = customers[i_]
+
+	return &customer, nil
+}
+
+func (db *Database) GetLastOrder(customerId int, warehouseId int, districtId int) (*models.Order, error) {
+	var err error
+	var order models.Order
+
+	projection := bson.D{
 		{"O_ID", 1},
 		{"O_CARRIER_ID", 1},
 		{"O_ENTRY_D", 1},
-		{"ORDER_LINE", 1},
-	}).SetComment("ORDER_STATUS"))
+	}
+
+	sort := bson.D{{"O_ID", 1}}
+
+	err = db.C.Collection("ORDERS").FindOne(db.ctx, bson.D{
+		{"O_W_ID", warehouseId},
+		{"O_D_ID", districtId},
+		{"O_C_ID", customerId},
+	},
+	options.FindOne().SetProjection(projection).SetSort(sort)).Decode(&order)
 
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	return &order, nil
 }
 
-func (db *Database) DoPayment(ctx context.Context, wId int, dId int, hAmount float64, cWId int,
-	cDId int, cId int, cLast string, hDate time.Time, badCredit string, cDataLen int) error {
-
-	districtProjection := bson.D{
-		{"D_NAME", 1},
-		{"D_STREET_1", 1},
-		{"D_STREET_2", 1},
-		{"D_CITY", 1},
-		{"D_STATE", 1},
-		{"D_ZIP", 1},
-	}
-
-	var district bson.M
+func (db *Database) GetOrderLines(orderId int, warehouseId int, districtId int) (*[]models.OrderLine, error) {
 	var err error
+	var order models.Order
 
-	if db.findAndModify {
-		err = db.C.Collection("DISTRICT").FindOneAndUpdate(ctx, bson.D{
-			{"D_ID", dId},
-			{"D_W_ID", wId},
-		},
-		bson.D{
-			{"$inc", bson.D{
-				{"D_YTD", hAmount},
-			}},
-		},
-		options.FindOneAndUpdate().SetProjection(districtProjection),
-		).Decode(&district)
-
-		if err != nil {
-			return err
-		}
-
-	} else {
-		err = db.C.Collection("DISTRICT").FindOne(ctx, bson.D{
-			{"D_W_ID", wId},
-			{"D_ID", dId},
-		}, options.FindOne().SetComment("PAYMENT").SetProjection(districtProjection)).Decode(&district)
-
-		if err != nil {
-			return err
-		}
-
-		_, err = db.C.Collection("DISTRICT").UpdateOne(ctx, bson.D{
-			{"_id", district["_id"]},
-		}, bson.D{
-			{"$inc", bson.D{
-				{"D_YTD", hAmount},
-			}},
-		}, nil)
-
-		if err != nil {
-			return err
-		}
+	projection := bson.D{
+		{"ORDER_LINE", 1},
 	}
+
+	err = db.C.Collection("ORDERS").FindOne(db.ctx, bson.D{
+		{"O_W_ID", warehouseId},
+		{"O_D_ID", districtId},
+		{"O_ID", orderId},
+	},
+		options.FindOne().SetProjection(projection)).Decode(&order)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &order.ORDER_LINE, nil
+}
+
+func (db *Database) GetWarehouse(warehouseId int) (*models.Warehouse, error) {
+
+	var err error
 
 	warehouseProjection := bson.D{
 		{"W_NAME", 1},
@@ -610,140 +769,80 @@ func (db *Database) DoPayment(ctx context.Context, wId int, dId int, hAmount flo
 		{"W_ZIP", 1},
 	}
 
-	var warehouse bson.M
+	var warehouse models.Warehouse
 
-	if db.findAndModify {
-		err = db.C.Collection("WAREHOUSE").FindOneAndUpdate(ctx,
-			bson.D{
-				{"W_ID", wId},
+	err = db.C.Collection("WAREHOUSE").FindOne(db.ctx, bson.D{
+		{"W_ID", warehouseId},
+	},
+		options.FindOne().SetProjection(warehouseProjection),
+	).Decode(&warehouse)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &warehouse, nil
+}
+
+func (db *Database) UpdateWarehouseBalance(warehouseId int, amount float64) (error) {
+
+	r, err := db.C.Collection("WAREHOUSE").UpdateOne(db.ctx, bson.D{
+				{"W_ID", warehouseId},
 			},
 			bson.D{
 				{"$inc", bson.D{
-					{"W_YTD", hAmount},
+					{"W_YTD", amount},
 				}},
 			},
-			options.FindOneAndUpdate().SetProjection(warehouseProjection),
-			).Decode(&warehouse)
+			)
 
-		if err != nil {
+	if err != nil {
 			return err
-		}
-
-	} else {
-		err = db.C.Collection("WAREHOUSE").FindOne(ctx, bson.D{
-			{"W_ID", wId},
-		},
-		options.FindOne().SetProjection(warehouseProjection),
-		).Decode(&warehouse)
-
-		if err != nil {
-			return err
-		}
-
-		_, err = db.C.Collection("WAREHOUSE").UpdateOne(ctx, bson.D{
-			{"_id", warehouse["_id"]},
-		},
-		bson.D{
-			{"$inc", bson.D{
-				{"W_YTD", hAmount},
-			}},
-		},
-		)
-
-		if err != nil {
-			return err
-		}
 	}
 
-	var customer bson.M
-
-	if cId > 0 {
-		err = db.C.Collection("CUSTOMER").FindOne(ctx, bson.D{
-			{"C_W_ID", wId},
-			{"C_D_ID", dId},
-			{"C_ID", cId},
-		}, options.FindOne().SetProjection(bson.D{
-			{"C_BALANCE", 0},
-			{"C_YTD_PAYMENT", 0},
-			{"C_PAYMENT_CNT", 0},
-		})).Decode(&customer)
-
-		if err != nil {
-			return err
-		}
-	} else {
-
-		cursor, err := db.C.Collection("CUSTOMER").Find(ctx, bson.D{
-			{"C_W_ID", wId},
-			{"C_D_ID", dId},
-			{"C_LAST", cLast},
-		}, options.Find().SetProjection(bson.D{
-			{"C_BALANCE", 0},
-			{"C_YTD_PAYMENT", 0},
-			{"C_PAYMENT_CNT", 0},
-		}))
-
-		if err != nil {
-			return err
-		}
-
-		var customers []bson.M
-		err = cursor.All(ctx, &customers)
-
-		if err != nil {
-			return err
-		}
-
-		if len(customers) == 0 {
-			return fmt.Errorf("No customers found")
-		}
-
-		i_ := int((len(customers) - 1) / 2)
-		customer = customers[i_]
-		cId = int(customer["C_ID"].(int32))
+	if r.MatchedCount == 0 {
+		return fmt.Errorf("no warehouse found")
 	}
 
-	if cId == 0 {
-		return fmt.Errorf("Customer not found")
+	return nil
+}
+
+
+
+func (db *Database) GetDistrict(warehouseId int, districtId int) (*models.District, error) {
+	var err error
+
+	var district models.District
+
+	err = db.C.Collection("DISTRICT").FindOne(db.ctx, bson.D{
+		{"D_ID", districtId},
+		{"D_W_ID", warehouseId},
+	}).Decode(&district)
+
+	if err != nil {
+		return nil, err
 	}
 
-	upd := bson.D{
+	return &district, nil
+}
+
+func (db *Database) UpdateDistrictBalance(warehouseId int, districtId int, amount float64) error {
+	filter := bson.D{
+		{"D_ID", districtId},
+		{"D_W_ID", warehouseId},
+	}
+
+	update := bson.D{
 		{"$inc", bson.D{
-			{"C_BALANCE", -1* hAmount},
-			{"C_YTD_PAYMENT", hAmount},
-			{"C_PAYMENT_CNT", 1},
+			{"D_YTD", amount},
 		}},
 	}
 
-	var buf string
-	if customer["C_CREDIT"] == badCredit {
-		buf = fmt.Sprintf("%v %v %v %v %v %v|%v", cId, cDId, cWId, dId, wId, hAmount, customer["C_DATA"])
-		if len(buf) > cDataLen {
-			upd = append(upd, bson.E{"$set", bson.D{
-				{"C_DATA", buf[:cDataLen]},
-			}})
-		}
+	r,err := db.C.Collection("DISTRICT").UpdateOne(db.ctx, filter, update, nil)
+
+	if r.MatchedCount == 0 {
+		return fmt.Errorf("No district found")
 	}
-
-	_, err = db.C.Collection("CUSTOMER").UpdateOne(ctx,
-		bson.D{
-			{"_id", customer["_id"]},
-		},
-		upd, nil)
-
-	if err != nil {
-		return err
-	}
-
-	hData := fmt.Sprintf("%v    %v", warehouse["W_NAME"], district["D_NAME"])
-
-	_, err = db.C.Collection("HISTORY").InsertOne(ctx, bson.D{
-		{"H_D_ID", dId},
-		{"H_W_ID", wId},
-		{"H_DATE", hDate},
-		{"H_AMOUNT", hAmount},
-		{"H_DATA", hData},
-	})
 
 	if err != nil {
 		return err
@@ -752,77 +851,109 @@ func (db *Database) DoPayment(ctx context.Context, wId int, dId int, hAmount flo
 	return nil
 }
 
-
-func (db *Database) DoNewOrder(
-	ctx context.Context,
-	w_id int,
-	d_id int,
-	c_id int,
-	o_entry_d time.Time,
-	i_ids []int,
-	i_w_ids []int,
-	i_qtys []int,
+func (db *Database) InsertHistory(
+	warehouseId int,
+	districtId int,
+	date time.Time,
+	amount float64,
+	data string,
 ) error {
 
-	districtProjection := bson.D{
-		{"_id", 0},
-		{"D_ID", 1},
-		{"D_W_ID", 1},
-		{"D_TAX", 1},
-		{"D_NEXT_O_ID", 1},
-	}
+	_, err := db.C.Collection("HISTORY").InsertOne(db.ctx, bson.D{
+		{"H_D_ID", districtId},
+		{"H_W_ID", warehouseId},
+		{"H_C_W_ID", warehouseId},
+		{"H_C_D_ID", districtId},
+		{"H_DATE", date},
+		{"H_AMOUNT", amount},
+		{"H_DATA", date},
+	})
 
-	var district bson.M
+	return err
+}
+
+func (db *Database) UpdateCredit(customerId int, warehouseId int, districtId int, balance float64, data string) error {
+	//updateBCCustomer
 	var err error
-	if db.findAndModify {
-		err = db.C.Collection("DISTRICT").FindOneAndUpdate(ctx,
-			bson.D{
-			{"D_ID", d_id},
-			{"D_W_ID", w_id},
-			},
-			bson.D{
-			{"$inc", bson.D{
-				{"D_NEXT_O_ID", 1},
-			}},
-			},
-			options.FindOneAndUpdate().SetProjection(districtProjection).SetSort(bson.D{
-				{"NO_O_ID", 1},
-			}),
-			).Decode(&district)
-
-		if err != nil {
-			return err
-		}
-	} else {
-		err = db.C.Collection("DISTRICT").FindOne(ctx, bson.D{
-			{"D_ID", d_id},
-			{"D_W_ID", w_id},
-		}, options.FindOne().SetProjection(districtProjection).SetSort(bson.D{
-			{"NO_O_ID", 1},
-		})).Decode(&district)
-
-		if err != nil {
-			return err
-		}
-
-		_, err = db.C.Collection("DISTRICT").UpdateOne(ctx, district,
-			bson.D{
-				{"$inc", bson.D{
-					{"D_NEXT_O_ID", 1},
-				}}},
-				nil,
-			)
-
-		if err != nil {
-			return err
-		}
+	update :=  bson.D{
+		{"$inc", bson.D{
+			{"C_BALANCE", -1* balance},
+			{"C_YTD_PAYMENT", balance},
+			{"C_PAYMENT_CNT", 1},
+		}},
 	}
 
-	//@TODO shards
-	// In PyTPCC they shard with i_w_id key, and here it needs to be implemented. Same for the loader
-	cursor, err := db.C.Collection("ITEM").Find(ctx, bson.D{
+	if len(data) > 0 {
+		update = append(update, bson.E{"$set", bson.D{
+			{"C_DATA", data},
+		}})
+	}
+
+	_, err = db.C.Collection("CUSTOMER").UpdateOne(db.ctx,
+		bson.D{
+			{"C_ID", customerId},
+			{"C_W_ID", warehouseId},
+			{"C_D_ID", districtId},
+		},
+		update, nil)
+
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (db *Database) CreateOrder(
+	orderId int,
+	customerId int,
+	warehouseId int,
+	districtId int,
+	oCarrierId int,
+	oOlCnt int,
+	allLocal int,
+	orderEntryDate time.Time,
+	orderLine []models.OrderLine,
+) error {
+
+	order := models.Order{
+		O_ID:         orderId,
+		O_C_ID:       customerId,
+		O_D_ID:       districtId,
+		O_W_ID:       warehouseId,
+		O_ENTRY_D:    orderEntryDate,
+		O_CARRIED_ID: oCarrierId,
+		O_OL_CNT:     oOlCnt,
+		O_ALL_LOCAL:  allLocal,
+		ORDER_LINE:   orderLine,
+	}
+
+	_, err := db.C.Collection("NEW_ORDER").InsertOne(db.ctx,
+		bson.D{
+			{"NO_O_ID", orderId},
+			{"NO_D_ID", districtId},
+			{"NO_W_ID", warehouseId},
+		})
+
+	if err != nil {
+		return err
+	}
+
+	_, err = db.C.Collection("ORDERS").InsertOne(db.ctx, order)
+
+	if err != nil {
+		return nil
+	}
+
+	return nil
+}
+
+//todo: sharding
+func (db *Database) GetItems(itemIds []int) (*[]models.Item, error) {
+
+	cursor, err := db.C.Collection("ITEM").Find(db.ctx, bson.D{
 		{"I_ID", bson.D{
-			{"$in", i_ids},
+			{"$in", itemIds},
 		}}},
 		options.Find().SetProjection(bson.D{
 			{"_id", 0},
@@ -833,93 +964,23 @@ func (db *Database) DoNewOrder(
 		}),
 	)
 
+	if err != nil {
+		return nil, err
+	}
+
+	var items []models.Item
+	err = cursor.All(db.ctx, &items)
 
 	if err != nil {
-		return err
+		return nil, err
 	}
 
+	return &items, nil
+}
 
-	var items []bson.M
-
-	err = cursor.All(ctx, &items)
-
-	if err != nil {
-		return err
-	}
-
-
-	if len(items) != len(i_ids) {
-		return fmt.Errorf("TPCC defines 1% of neworder gives a wrong itemid, causing rollback. This happens on purpose")
-	}
-
-	//@TODO@
-	// shall items be sorted?
-
-	var warehouse bson.M
-
-	err = db.C.Collection("WAREHOUSE").FindOne(ctx,
-		bson.D{
-			{"W_ID", w_id},
-		},
-		options.FindOne().SetProjection(bson.D{
-		{"_id", 0},
-		{"W_TAX", 1},
-		})).Decode(&warehouse)
-
-
-	if err != nil {
-		return err
-	}
-
-	var customer bson.M
-
-	err = db.C.Collection("CUSTOMER").FindOne(ctx,
-		bson.D{
-			{"C_ID", c_id},
-			{"C_D_ID", d_id},
-			{"C_W_ID", w_id},
-		}, options.FindOne().SetProjection(bson.D{
-		{"C_DISCOUNT", 1},
-		{"C_LAST", 1},
-		{"C_CREDIT", 1},
-		})).Decode(&customer)
-
-	if err != nil {
-		return err
-	}
-	_, err = db.C.Collection("NEW_ORDER").InsertOne(ctx,
-		bson.D{
-			{"NO_O_ID", district["D_NEXT_O_ID"]},
-			{"NO_D_ID", d_id},
-			{"NO_W_ID", w_id},
-		})
-
-	if err != nil {
-		return err
-	}
-
-
-	allLocal := 1
-	for _, item := range i_w_ids {
-		if item != w_id {
-			allLocal = 0
-			break
-		}
-	}
-
-	order := bson.D{
-		{"O_ID", district["D_NEXT_O_ID"]},
-		{"O_ENTRY_D", o_entry_d},
-		{"O_CARRIER_ID", 0}, //@todo@ it should be constant
-		{"O_OL_CNT", len(i_ids)},
-		{"O_ALL_LOCAL", allLocal},
-		{"O_D_ID", d_id},
-		{"O_W_ID", w_id},
-		{"O_C_ID", c_id},
-
-	}
-
-	distCol := fmt.Sprintf("S_DIST_%02d", d_id)
+func (db *Database) GetStockInfo(districtId int, iIds []int, iWids []int, allLocal int) (*[]models.Stock, error) {
+	var err error
+	distCol := fmt.Sprintf("S_DIST_%02d", districtId)
 	stockProjection := bson.D{
 		{"_id", 0},
 		{"S_I_ID", 1},
@@ -932,99 +993,70 @@ func (db *Database) DoNewOrder(
 		{distCol, 1},
 	}
 
-
+	var cursor *mongo.Cursor
 	if allLocal == 1 {
-		cursor,err =  db.C.Collection("STOCK").Find(ctx,
-			bson.D{
-				{"S_I_ID", bson.D{
-					{"$in", i_ids},
-				}},
-				{"S_W_ID", w_id},
-			}, options.Find().SetProjection(stockProjection))
+		cursor, err = db.C.Collection("STOCK").Find(db.ctx, bson.D{
+			{"S_I_ID", bson.D{
+				{"$in", iIds},
+			}},
+			{"S_W_ID", iWids[0]},
+		})
 
 		if err != nil {
-			return err
+			return nil, err
 		}
 	} else {
 		var searchList []bson.D
-		for item, value := range i_ids {
+		for item, value := range iIds {
 			searchList = append(searchList, bson.D{
 				{"S_I_ID", value},
-				{"S_W_ID", i_w_ids[item]},
+				{"S_W_ID", iWids[item]},
 			})
 		}
-		cursor, err = db.C.Collection("STOCK").Find(ctx,
-		bson.D{
-			{"$or", searchList},
 
-		},options.Find().SetProjection(stockProjection))
+		cursor, err = db.C.Collection("STOCK").Find(db.ctx,
+			bson.D{
+				{"$or", searchList},
+
+			},options.Find().SetProjection(stockProjection))
 
 		if err != nil {
-			 return err
+			return nil, err
 		}
 	}
 
-	var stocks []bson.M
+	var stocks []models.Stock
 
-	//todo
-	//sorting
+	err = cursor.All(db.ctx, &stocks)
+	if err != nil {
+		return nil, err
+	}
 
-	err = cursor.All(ctx, &stocks)
+	return &stocks, nil
+}
+
+func (db *Database) UpdateStock(stockId int, warehouseId int, quantity int, ytd int, ordercnt int, remotecnt int ) error {
+	ru, err := db.C.Collection("STOCK").UpdateOne(db.ctx,
+		bson.D{
+		{"S_I_ID", stockId},
+		{"S_W_ID", warehouseId},
+		},
+		bson.D{
+			{"$set", bson.D{
+				{"S_QUANTITY", quantity},
+				{"S_YTD", ytd},
+				{"S_ORDER_CNT", ordercnt},
+				{"S_REMOTE_CNT", remotecnt},
+			}},
+		},
+		)
+
 	if err != nil {
 		return err
 	}
 
-	if len(stocks) != len(i_ids) {
-		return fmt.Errorf("len(stocks) != len(i_ids)")
-	}
-
-	for i:=0; i < len(i_ids); i++ {
-
-		sQuantity := int(stocks[i]["S_QUANTITY"].(int32))
-
-		if sQuantity >= 10 + i_qtys[i] {
-			sQuantity -=  i_qtys[0]
-		} else {
-			sQuantity += 91 - i_qtys[0]
-		}
-
-		if i_w_ids[i] != w_id {
-
-			_, err := db.C.Collection("STOCK").UpdateOne(
-				ctx,
-				stocks[i],
-				bson.D{
-				{"$set", bson.D{
-					{"S_QUANTITY", sQuantity},
-					{"S_YTD", int(stocks[i]["S_YTD"].(int32)) + i_qtys[i]},
-					{"S_ORDER_CNT", 1 + int(stocks[i]["S_ORDER_CNT"].(int32))},
-					{"S_REMOTE_CNT", 1 + int(stocks[i]["S_REMOTE_CNT"].(int32))},
-				}},
-			},
-			)
-
-			if err != nil {
-				return err
-			}
-		}
-
-		order = append(order, bson.E{
-			"ORDER_LINE", bson.D{
-				{"OL_O_ID", district["D_NEXT_O_ID"]},
-				{"OL_NUMBER", i + 1 },
-				{"OL_I_ID", i_ids[i]},
-				{"OL_SUPPLY_W_ID", i_w_ids[i]},
-				{"OL_DELIVERY_D", o_entry_d},
-				{"OL_QUANTITY", i_qtys[i]},
-				{"OL_AMOUNT", float64(i_qtys[i]) * items[0]["I_PRICE"].(float64)},
-				{"OL_DIST_INFO", stocks[i][distCol].(string)},
-			},
-		})
-	}
-
-	_, err = db.C.Collection("ORDER").InsertOne(ctx, order)
-	if err != nil {
-		return err
+	if ru.MatchedCount == 0 {
+		return fmt.Errorf("0 document matched")
 	}
 
 	return nil

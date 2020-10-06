@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"github.com/Percona-Lab/go-tpcc/tpcc"
+	"math"
+	"sort"
 	"sync"
 	"time"
 
@@ -24,9 +26,25 @@ var runCmd = &cobra.Command{
 		dbname, _ := cmd.Root().PersistentFlags().GetString("db")
 		uri, _ := cmd.Root().PersistentFlags().GetString("uri")
 		trx,_ := cmd.Root().PersistentFlags().GetBool("trx")
+		rf_, _ := cmd.PersistentFlags().GetString("report-format")
+		perc, _ := cmd.PersistentFlags().GetInt("percentile")
+		percfail, _ := cmd.PersistentFlags().GetInt("percent-fail")
 
+		if perc > 100 || perc < 0 {
+			panic("percentile not correct")
+		}
 
+		var rf OutputType
+		switch rf_ {
+		case "json":
+			rf = JSONOutput
 
+		case "csv":
+			rf=CSVOutput
+
+		default:
+			rf=DefaultOutput
+		}
 
 		var t tpcc.Configuration
 		t.Threads = 1
@@ -48,6 +66,7 @@ var runCmd = &cobra.Command{
 					ScaleFactor:    scalefactor,
 					URI: uri,
 					Transactions: trx,
+					PercentFail: percfail,
 				}
 
 				w, err := tpcc.NewWorker(ctx, &conf, wg, c, i)
@@ -59,7 +78,7 @@ var runCmd = &cobra.Command{
 		}
 
 		wg.Add(1)
-		go stats(cancel, c, wg, time, ri)
+		go stats(cancel, c, wg, time, ri, rf, float64(perc))
 		wg.Wait()
 	},
 }
@@ -71,13 +90,25 @@ func init() {
 	runCmd.PersistentFlags().Int("report-interval", 1, "Report interval")
 	runCmd.PersistentFlags().Int("time", 10, "How long to run the test")
 	runCmd.PersistentFlags().Int("warehouses", 10, "Number of warehouses to generate the data")
+	runCmd.PersistentFlags().Int("percentile", 95, "Percentile for latency reporting")
+	runCmd.PersistentFlags().Int("percent-fail", 0, "How much % of New Order trxs should fail [0-100]")
+
+
 	runCmd.PersistentFlags().Float64("scalefactor", 1, "Scale-factor")
+	runCmd.PersistentFlags().String("report-format", "default", "default|json|csv")
 
 	rootCmd.MarkFlagRequired("uri")
 	rootCmd.MarkFlagRequired("db")
 }
 
-func stats( cancel context.CancelFunc, c chan tpcc.Transaction,  wg *sync.WaitGroup, ttime int, ri int ) {
+type OutputType int
+const (
+	DefaultOutput = iota
+	CSVOutput
+	JSONOutput
+)
+
+func stats( cancel context.CancelFunc, c chan tpcc.Transaction,  wg *sync.WaitGroup, ttime int, ri int, output OutputType, percentile float64) {
 	defer wg.Done()
 	ticker := time.NewTicker(time.Duration(ri) * time.Second)
 	timeout := time.After(time.Duration(ttime) * time.Second + 99 * time.Millisecond)
@@ -93,7 +124,12 @@ func stats( cancel context.CancelFunc, c chan tpcc.Transaction,  wg *sync.WaitGr
 
 	globalStats := make(map[int]*Transactions)
 	batchStats := make(map[int]*Transactions)
+	latencies := make(map[tpcc.TransactionType][]float64)
 
+
+	if output == CSVOutput {
+		fmt.Println("Time,TPS,StockLevel,StockLevelLatency,Delivery,DeliveryLatency,OrderStatus,OrderStatusLatency,Payment,PaymentLatency,NewOrder,NewOrderLatency,Failed")
+	}
 
 	for {
 		select {
@@ -149,6 +185,10 @@ func stats( cancel context.CancelFunc, c chan tpcc.Transaction,  wg *sync.WaitGr
 					batchStats[v.ThreadId].NewOrderCnt++
 					globalStats[v.ThreadId].NewOrderCnt++
 				}
+
+			latencies[v.Type] = append(latencies[v.Type], v.Time)
+
+
 			case <-ticker.C:
 				sCnt := 0
 				dCnt := 0
@@ -166,20 +206,51 @@ func stats( cancel context.CancelFunc, c chan tpcc.Transaction,  wg *sync.WaitGr
 					failed += value.Failed
 				}
 				batchStats = make(map[int]*Transactions)
+				var format string
+				switch output {
+				case CSVOutput:
+					format = "%d,%.2f,%d,%.2f,%d,%.2f,%d,%.2f,%d,%.2f,%d,%.2f,%d\n"
+				case JSONOutput:
+					format = "{\"time\": %d, \"tps\": %.2f, \"StockLevel\": { \"Trx\": %d, \"LatencyPercentile\": %.2f}, " +
+						"\"Delivery\": { \"Trx\": %d, \"LatencyPercentile\": %.2f}, " +
+						"\"OrderStatus\": { \"Trx\": %d, \"LatencyPercentile\":%.2f}, " +
+						"\"Payment\": { \"Trx\": %d, \"LatencyPercentile\": %.2f}, " +
+						"\"NewOrder\": { \"Trx\": %d, \"LatencyPercentile\": %.2f}," +
+						"\"Failed\": %d}\n"
+				default:
+					format = "[ %ds ] TPS: %.2f StockLevel: %d (%.2f ms) Delivery: %d (%.2f ms) OrderStatus: %d (%.2f ms) Payment: %d (%.2f ms) NewOrder: %d (%.2f ms) Failed: %d\n"
+				}
 
 				fmt.Printf(
-					"[ %ds ] TPS: %.2f StockLevel: %d Delivery: %d OrderStatus: %d Payment: %d NewOrder: %d Failed: %d\n",
+					format,
 					i,
 					float64(sCnt+dCnt+oCnt+pCnt+nCnt)/float64(ri),
 					sCnt,
+					float64(perc(latencies[tpcc.StockLevelTrx], percentile)),
 					dCnt,
+					float64(perc(latencies[tpcc.DeliveryTrx], percentile)),
 					oCnt,
+					float64(perc(latencies[tpcc.OrderStatusTrx], percentile)),
 					pCnt,
+					float64(perc(latencies[tpcc.PaymentTrx], percentile)),
 					nCnt,
+					float64(perc(latencies[tpcc.NewOrderTrx], percentile)),
 					failed,
 				)
+
 				i += ri
-			default:
+				latencies = make(map[tpcc.TransactionType][]float64)
+		default:
 		}
 	}
+}
+
+func perc(a []float64, p float64) float64 {
+	p = p/100
+	if len(a) == 0 {
+		return 0
+	}
+	sort.Float64s(a)
+	idx := int( math.Round(float64(len(a))*p) )
+	return a[idx-1]
 }

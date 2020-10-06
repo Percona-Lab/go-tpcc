@@ -1,27 +1,17 @@
 package tpcc
 
 import (
+	"github.com/Percona-Lab/go-tpcc/tpcc/models"
 	"math/rand"
 	"github.com/Percona-Lab/go-tpcc/helpers"
 	"time"
 )
 
-type Warehouse struct {
-	W_ID       int `bson:"W_ID"`
-	W_NAME     string `bson:"W_NAME"`
-	W_STREET_1 string `bson:"W_STREET_1"`
-	W_STREET_2 string `bson:"W_STREET_2"`
-	W_CITY     string `bson:"W_CITY"`
-	W_STATE    string `bson:"W_STATE"`
-	W_ZIP      string `bson:"W_ZIP"`
-	W_TAX      float64 `bson:"W_TAX"`
-	W_YTD      float64 `bson:"W_YTD"`
-}
 
-func (w *Worker) GenerateWarehouse(id int) Warehouse {
+func (w *Worker) GenerateWarehouse(id int) models.Warehouse {
 
 	address_ := w.generateRandomAddress()
-	return Warehouse{
+	return models.Warehouse{
 		W_ID:       id,
 		W_NAME:     helpers.RandString(helpers.RandInt(MIN_NAME, MAX_NAME)),
 		W_STREET_1: address_.street_1,

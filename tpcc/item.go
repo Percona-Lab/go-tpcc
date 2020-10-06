@@ -1,14 +1,10 @@
 package tpcc
 
-import "github.com/Percona-Lab/go-tpcc/helpers"
+import (
+	"github.com/Percona-Lab/go-tpcc/helpers"
+	"github.com/Percona-Lab/go-tpcc/tpcc/models"
+)
 
-type Item struct {
-	I_ID    int `bson:"I_ID"`
-	I_IM_ID int `bson:"I_IM_ID"`
-	I_NAME  string `bson:"I_NAME"`
-	I_PRICE float64 `bson:"I_PRICE"`
-	I_DATA  string `bson:"I_DATA"`
-}
 
 func (w *Worker) LoadItems() {
 	originalRows := helpers.SelectUniqueIds(int(w.sc.Items/10), 1, w.sc.Items)
@@ -25,7 +21,7 @@ func (w *Worker) LoadItems() {
 	}
 	w.ex.Flush(TABLENAME_ITEM)
 }
-func (w *Worker) GenerateItem(id int, isOriginalRow bool) Item {
+func (w *Worker) GenerateItem(id int, isOriginalRow bool) models.Item {
 
 	var iData = helpers.RandString(helpers.RandInt(MIN_I_DATA, MAX_I_DATA))
 	if isOriginalRow {
@@ -34,13 +30,11 @@ func (w *Worker) GenerateItem(id int, isOriginalRow bool) Item {
 			ORIGINAL_STRING,
 		)
 	}
-	i := Item{
+	return models.Item{
 		I_ID:    id,
 		I_IM_ID: helpers.RandInt(MIN_IM, MAX_IM),
 		I_NAME:  helpers.RandString(helpers.RandInt(MIN_I_NAME, MAX_I_NAME)),
 		I_PRICE: helpers.RandFloat(MIN_PRICE, MAX_PRICE, MONEY_DECIMALS),
 		I_DATA:  iData,
 	}
-
-	return i
 }

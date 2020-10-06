@@ -82,7 +82,7 @@ jobs:
         platforms: linux/amd64
         push: true
         tags: |
-          Percona-Lab/go-tpcc:latest
-          Percona-Lab/go-tpcc:${{ steps.get_version.outputs.VERSION }}
-          ghcr.io/Percona-Lab/go-tpcc:latest
-          ghcr.io/Percona-Lab/go-tpcc:${{ steps.get_version.outputs.VERSION }}
+          percona-lab/go-tpcc:latest
+          percona-lab/go-tpcc:${{ steps.get_version.outputs.VERSION }}
+          ghcr.io/percona-lab/go-tpcc:latest
+          ghcr.io/percona-lab/go-tpcc:${{ steps.get_version.outputs.VERSION }}

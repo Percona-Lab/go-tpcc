@@ -82,7 +82,6 @@ jobs:
         platforms: linux/amd64
         push: true
         tags: |
-          ghcr.io/impimp/go-tpcc:latest
-          ghcr.io/impimp/go-tpcc:${{ steps.get_version.outputs.VERSION }}
-          impimp/go-tpcc:latest
-          impimp/go-tpcc:${{ steps.get_version.outputs.VERSION }}
+          ghcr.io/percona-lab/go-tpcc/go-tpcc:latest
+          ghcr.io/percona-lab/go-tpcc/go-tpcc:${{ steps.get_version.outputs.VERSION }}
+          

@@ -122,7 +122,7 @@ const (
 	TABLENAME_HISTORY    = "HISTORY"
 )
 
-var SYLLABES = [...]string {  "BAR", "OUGHT", "ABLE", "PRI", "PRES", "ESE", "ANTI", "CALLY", "ATION", "EING" }
+var SYLLABLES = [...]string {"BAR", "OUGHT", "ABLE", "PRI", "PRES", "ESE", "ANTI", "CALLY", "ATION", "EING" }
 
 
 

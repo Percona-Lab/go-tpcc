@@ -6,10 +6,12 @@ import (
 	"github.com/Percona-Lab/go-tpcc/executor"
 	"github.com/Percona-Lab/go-tpcc/helpers"
 	"sync"
+	"fmt"
 	"time"
 )
 
 type Configuration struct {
+	DBDriver string
 	URI string
 	Transactions bool
 	DBName string
@@ -31,6 +33,7 @@ type Worker struct {
 	ctx context.Context
 	wg *sync.WaitGroup
 	c chan Transaction
+	denormalized bool
 }
 
 func NewWorker(ctx context.Context, configuration *Configuration, wg *sync.WaitGroup, c chan Transaction, threadId int) (*Worker, error) {
@@ -44,11 +47,19 @@ func NewWorker(ctx context.Context, configuration *Configuration, wg *sync.WaitG
 		INITIAL_NEW_ORDERS_PER_DISTRICT,
 	)
 
-	d, err := databases.NewMongoDb(configuration.URI, configuration.DBName, configuration.Transactions, false)
-	if err != nil {
-		panic(err)
+	den := false
+	if configuration.DBDriver == "mongodb" {
+		den = true
 	}
-	ex,_ := executor.NewExecutor(d,256)
+
+	d, err := databases.NewDatabase(configuration.DBDriver, configuration.URI, configuration.DBName, "a", "b", configuration.Transactions, false)
+	if err != nil {
+		return nil, err
+	}
+	ex, err := executor.NewExecutor(d,256)
+	if err != nil {
+		return nil, err
+	}
 
 	w := &Worker {
 		threadId:	threadId,
@@ -58,6 +69,7 @@ func NewWorker(ctx context.Context, configuration *Configuration, wg *sync.WaitG
 		ctx: ctx,
 		wg: wg,
 		c: c,
+		denormalized: den,
 	}
 
 	return w, nil
@@ -141,8 +153,6 @@ func (w *Worker) Execute() {
 
 			trx.Failed = false
 			if status != nil {
-				//fmt.Println(trx.Type)
-				//fmt.Println(status)
 				trx.Failed = true
 			}
 
@@ -176,9 +186,9 @@ func (w *Worker) DoOrderStatus() error {
 	if helpers.RandInt(1,100) <= 60 {
 		sylN := (helpers.RandInt(0, 256)|helpers.RandInt(0,1000)+helpers.RandInt(0,256))%1000
 
-		cLast = SYLLABES[sylN/100] +
-			SYLLABES[(sylN/10)%10] +
-			SYLLABES[sylN%10]
+		cLast = SYLLABLES[sylN/100] +
+			SYLLABLES[(sylN/10)%10] +
+			SYLLABLES[sylN%10]
 
 	} else {
 		cId = helpers.RandInt(1, w.sc.CustomersPerDistrict)
@@ -208,9 +218,9 @@ func (w *Worker) DoPayment() error {
 	if helpers.RandInt(1, 100) <= 60 {
 		sylN := (helpers.RandInt(0, 256)|helpers.RandInt(0,1000)+helpers.RandInt(0,256))%1000
 
-		cLast = SYLLABES[sylN/100] +
-			SYLLABES[(sylN/10)%10] +
-			SYLLABES[sylN%10]
+		cLast = SYLLABLES[sylN/100] +
+			SYLLABLES[(sylN/10)%10] +
+			SYLLABLES[sylN%10]
 
 	} else {
 		cId = helpers.RandInt(1, w.sc.CustomersPerDistrict)
@@ -259,4 +269,8 @@ func (w *Worker) DoNewOrder() error {
 
 func (w *Worker) CreateIndexes() error {
 	return w.ex.CreateIndexes()
+}
+
+func (w *Worker) CreateSchema() error {
+	return w.ex.CreateSchema()
 }

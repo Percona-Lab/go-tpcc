@@ -10,14 +10,16 @@ import (
 type Executor struct {
 	batchSize int
 	data map[string][]interface{}
-	db *databases.Database
+	db databases.Database
 	retries int
 	transaction bool
 }
 
 const DefaultRetries = 10
 
-func NewExecutor(db *databases.Database, batchSize int) (*Executor, error) {
+func NewExecutor(db databases.Database, batchSize int) (*Executor, error) {
+
+
 	return &Executor {
 		batchSize: 512,
 		data:      make(map[string][]interface{}),
@@ -38,24 +40,36 @@ func (e *Executor) ChangeRetries(r int) {
 // @TODO@
 // Error handling
 
-func (e *Executor) SaveBatch(collectionName string, d interface{}) {
+func (e *Executor) SaveBatch(collectionName string, d interface{}) error {
 	e.data[collectionName] = append(e.data[collectionName], d)
 
 	if len(e.data[collectionName]) % e.batchSize == 0 {
-		e.db.InsertBatch(collectionName,e.data[collectionName])
+		err := e.db.InsertBatch(collectionName,e.data[collectionName])
+		if err != nil {
+			return err
+		}
 		delete(e.data, collectionName)
 
 	}
+	return nil
 }
 
-func (e *Executor) Flush(collectionName string) {
-	e.db.InsertBatch(collectionName,e.data[collectionName])
+func (e *Executor) Flush(collectionName string) error {
+	err := e.db.InsertBatch(collectionName,e.data[collectionName])
+	if err != nil {
+		return err
+	}
 	delete(e.data, collectionName)
+	return nil
 }
-//@TODO@
-//error handling
-func (e *Executor) Save(collectionName string, d interface{}) {
-	e.db.InsertOne(collectionName, d)
+
+func (e *Executor) Save(collectionName string, d interface{}) error {
+	err := e.db.InsertOne(collectionName, d)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 
@@ -121,14 +135,34 @@ func (e *Executor) DoStockLevelTrx(warehouseId int, districtId int, threshold in
 
 func (e *Executor) DoDeliveryTrx(wId int, oCarrierId int, olDeliveryD time.Time, dId int) error {
 	return e.DoTrxRetries(func() error {
-		return e.DoDelivery(wId, oCarrierId, olDeliveryD, dId)
+		for i := 1; i <= dId; i++ {
+			err := e.DoDelivery(wId, oCarrierId, olDeliveryD, i)
+			if err != nil {
+				panic(err)
+			}
+		}
+
+		return nil
+
 	})
 }
 
 //todo the order of arguments here is weird
 // also the dId passed from the worker is probably utterly wrong
 func (e *Executor) DoDelivery(wId int, oCarrierId int, olDeliveryD time.Time, dId int) error {
+
 	no, err := e.db.GetNewOrder(wId, dId)
+	if err != nil {
+		fmt.Println("WID=",wId, " DID=",dId)
+		return err
+	}
+
+	cid, err := e.db.GetCustomerIdOrder(no.NO_O_ID, wId, dId)
+	if err != nil {
+		return err
+	}
+
+	olAmount, err := e.db.SumOLAmount(no.NO_O_ID, wId, dId)
 	if err != nil {
 		return err
 	}
@@ -144,6 +178,11 @@ func (e *Executor) DoDelivery(wId int, oCarrierId int, olDeliveryD time.Time, dI
 	}
 
 	err = e.db.UpdateOrders(no.NO_O_ID, wId, dId, oCarrierId, olDeliveryD)
+	if err != nil {
+		return err
+	}
+
+	err = e.db.UpdateCustomer(cid, wId, dId, olAmount)
 	if err != nil {
 		return err
 	}
@@ -234,6 +273,7 @@ func (e *Executor) DoPayment(
 	district, err := e.db.GetDistrict(warehouseId, districtId)
 
 	if err != nil {
+		fmt.Println(warehouseId, districtId)
 		return err
 	}
 
@@ -245,13 +285,23 @@ func (e *Executor) DoPayment(
 	var customer *models.Customer
 	if cId > 0 {
 		customer, err = e.db.GetCustomerById(cId, warehouseId, districtId)
+		if err != nil {
+			return err
+		}
 	} else {
 		customer, err = e.db.GetCustomerByName(cLast, warehouseId, districtId)
+		if err != nil {
+			return err
+		}
+		return err
+		cId = customer.C_ID
 	}
 
 	if err != nil {
 		return err
 	}
+
+
 
 	if customer.C_CREDIT == badCredit {
 		var buf string
@@ -276,6 +326,8 @@ func (e *Executor) DoPayment(
 	err = e.db.InsertHistory(warehouseId, districtId, time.Now(), amount, hData)
 
 	if err != nil {
+		panic(err)
+		panic("here")
 		return err
 	}
 
@@ -388,6 +440,10 @@ func (e *Executor) DoNewOrder(wId, dId, cId int, oEntryD time.Time, iIds []int, 
 
 func (e *Executor) CreateIndexes() error {
 	return e.db.CreateIndexes()
+}
+
+func (e *Executor) CreateSchema() error {
+	return e.db.CreateSchema()
 }
 
 func distCol(dId int, stock *models.Stock) string {

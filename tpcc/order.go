@@ -20,7 +20,7 @@ func (w* Worker) generateOrder(oWId int, oDId int, oId int, oCId int, oOlCnt int
 		O_D_ID:       oDId,
 		O_W_ID:       oWId,
 		O_ENTRY_D:    time.Now(),
-		O_CARRIED_ID: carrierId,
+		O_CARRIER_ID: carrierId,
 		O_OL_CNT:     oOlCnt,
 		O_ALL_LOCAL:  INITIAL_ALL_LOCAL,
 	}

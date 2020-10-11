@@ -57,10 +57,10 @@ type Order struct {
 	O_D_ID       int `bson:"O_D_ID"`
 	O_W_ID       int `bson:"O_W_ID"`
 	O_ENTRY_D    time.Time `bson:"O_ENTRY_D"`
-	O_CARRIED_ID int `bson:"O_CARRIED_ID"`
+	O_CARRIER_ID int `bson:"O_CARRIER_ID"`
 	O_OL_CNT     int `bson:"O_OL_CNT"`
 	O_ALL_LOCAL  int `bson:"O_ALL_LOCAL"`
-	ORDER_LINE []OrderLine `bson:"ORDER_LINE,omitempty"`
+	ORDER_LINE []OrderLine `bson:"ORDER_LINE,omitempty" sql:"omit"`
 }
 
 type NewOrder struct {
@@ -112,7 +112,6 @@ type Stock struct {
 	S_ORDER_CNT  int    `bson:"S_ORDER_CNT"`
 	S_REMOTE_CNT int    `bson:"S_REMOTE_CNT"`
 	S_DATA       string `bson:"S_DATA"`
-	distCol      string
 }
 
 

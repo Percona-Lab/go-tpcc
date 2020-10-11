@@ -1,17 +1,3 @@
-// Copyright © 2020 NAME HERE <EMAIL ADDRESS>
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 package cmd
 
 import (
@@ -32,6 +18,7 @@ var prepareCmd = &cobra.Command{
 		threads, _ := cmd.PersistentFlags().GetInt("threads")
 		scalefactor, _ := cmd.PersistentFlags().GetFloat64("scalefactor")
 		dbname, _ := cmd.Root().PersistentFlags().GetString("db")
+		dbdriver, _ := cmd.Root().PersistentFlags().GetString("dbdriver")
 
 		uri, _ := cmd.Root().PersistentFlags().GetString("uri")
 		trx,_ := cmd.Root().PersistentFlags().GetBool("trx")
@@ -48,6 +35,7 @@ var prepareCmd = &cobra.Command{
 		}
 
 		c := tpcc.Configuration{
+			DBDriver: 		dbdriver,
 			DBName:         dbname,
 			Threads:        threads,
 			WriteConcern:   0,
@@ -57,6 +45,22 @@ var prepareCmd = &cobra.Command{
 			ScaleFactor:    scalefactor,
 			URI: uri,
 			Transactions: trx,
+		}
+
+		ddl, err := tpcc.NewWorker(context.Background(), &c, nil, nil, 0)
+		if err != nil {
+			panic(err)
+		}
+
+		fmt.Println("Creating schema")
+		err = ddl.CreateSchema()
+		if err != nil {
+			panic(err)
+		}
+		fmt.Println("... done")
+
+		if err != nil {
+			panic(err)
 		}
 
 		for i:=0; i < threads; i++ {
@@ -75,7 +79,10 @@ var prepareCmd = &cobra.Command{
 				for wId := range wj {
 
 					fmt.Printf("Loading warehouse %d\n", wId)
-					w.LoadWarehouse(wId)
+					err := w.LoadWarehouse(wId)
+					if err != nil {
+						panic(err)
+					}
 					wr <- wId
 				}
 
@@ -86,11 +93,8 @@ var prepareCmd = &cobra.Command{
 			<- wr
 		}
 
-		w, err := tpcc.NewWorker(context.Background(), &c, nil, nil, 0)
-		if err != nil {
-			panic(err)
-		}
-		err = w.CreateIndexes()
+		fmt.Println("Creating indexes")
+		ddl.CreateIndexes()
 
 		if err != nil {
 			panic(err)

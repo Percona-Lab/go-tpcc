@@ -24,11 +24,15 @@ func (w *Worker) GenerateWarehouse(id int) models.Warehouse {
 	}
 }
 
-func (w *Worker) LoadWarehouse(id int) {
+func (w *Worker) LoadWarehouse(id int) error {
+	var err error
 	warehouse := w.GenerateWarehouse(id)
-	w.ex.Save(TABLENAME_WAREHOUSE, warehouse)
+	err = w.ex.Save(TABLENAME_WAREHOUSE, warehouse)
+	if err != nil {
+		return err
+	}
 
-	for i := 1; i<w.sc.DistrictsPerWarehouse+1; i++ {
+	for i := 1; i <= w.sc.DistrictsPerWarehouse+1; i++ {
 		district := w.generateDistrict(i, id, w.sc.CustomersPerDistrict+1)
 		w.ex.Save(TABLENAME_DISTRICT, district)
 		badCredits := helpers.SelectUniqueIds(w.sc.CustomersPerDistrict/10, 1, w.sc.CustomersPerDistrict)
@@ -49,12 +53,25 @@ func (w *Worker) LoadWarehouse(id int) {
 			}
 
 			customersId = append(customersId, c)
-			w.ex.SaveBatch(TABLENAME_CUSTOMER, w.generateCustomer(c, id, i, isBadCredit))
-			w.ex.SaveBatch(TABLENAME_HISTORY, w.generateHistory(id, i, c))
+			err = w.ex.SaveBatch(TABLENAME_CUSTOMER, w.generateCustomer(c, id, i, isBadCredit))
+			if err != nil {
+				return err
+			}
+
+			err = w.ex.SaveBatch(TABLENAME_HISTORY, w.generateHistory(id, i, c))
+			if err != nil {
+				return err
+			}
 		}
 
-		w.ex.Flush(TABLENAME_CUSTOMER)
-		w.ex.Flush(TABLENAME_HISTORY)
+		err = w.ex.Flush(TABLENAME_CUSTOMER)
+		if err != nil {
+			return err
+		}
+		err = w.ex.Flush(TABLENAME_HISTORY)
+		if err != nil {
+			return err
+		}
 
 		rand.Seed(time.Now().UnixNano())
 		rand.Shuffle(len(customersId), func(i, j int) { customersId[i], customersId[j] = customersId[j], customersId[i] })
@@ -64,25 +81,54 @@ func (w *Worker) LoadWarehouse(id int) {
 			isNewOrder := false
 			if w.sc.CustomersPerDistrict - w.sc.NewOrdersPerDistrict < c {
 				isNewOrder = true
-				w.ex.SaveBatch(TABLENAME_NEW_ORDER, w.generateNewOrder(id, i, c))
+				err = w.ex.SaveBatch(TABLENAME_NEW_ORDER, w.generateNewOrder(id, i, c))
+				if err != nil {
+					return err
+				}
 			}
 
 			order := w.generateOrder(id, i, c, customersId[c-1], orderCount, isNewOrder)
-
-			for o := 0; o < orderCount; o++ {
-				//@TODO@
-				//For other databases it should be probably a different table
-				//ex.SaveBatch("orderLine", w.generateOrderLine(id, i, c, o, w.sc.Items, isNewOrder))
-				//orderLines = append(orderLines, )
-				order.ORDER_LINE = append(order.ORDER_LINE, w.generateOrderLine(id, i, c, o, w.sc.Items, isNewOrder))
+			if w.denormalized {
+				for o := 0; o < orderCount; o++ {
+					//@TODO@
+					//For other databases it should be probably a different table
+					//ex.SaveBatch("orderLine", w.generateOrderLine(id, i, c, o, w.sc.Items, isNewOrder))
+					//orderLines = append(orderLines, )
+					order.ORDER_LINE = append(order.ORDER_LINE, w.generateOrderLine(id, i, c, o, w.sc.Items, isNewOrder))
+				}
+				err = w.ex.SaveBatch(TABLENAME_ORDERS, order)
+				if err != nil {
+					return err
+				}
+			} else {
+				err = w.ex.SaveBatch(TABLENAME_ORDERS, order)
+				if err != nil {
+					return err
+				}
+				for o := 0; o < orderCount; o++ {
+					err = w.ex.SaveBatch(TABLENAME_ORDER_LINE, w.generateOrderLine(id, i, c, o, w.sc.Items, isNewOrder))
+					if err != nil {
+						return err
+					}
+				}
+				err = w.ex.Flush(TABLENAME_ORDER_LINE)
+				if err != nil {
+					return err
+				}
 			}
 
-			w.ex.SaveBatch(TABLENAME_ORDERS, order)
+
 
 		}
 
-		w.ex.Flush(TABLENAME_ORDERS)
-		w.ex.Flush(TABLENAME_NEW_ORDER)
+		err = w.ex.Flush(TABLENAME_ORDERS)
+		if err != nil {
+			return err
+		}
+		err = w.ex.Flush(TABLENAME_NEW_ORDER)
+		if err != nil {
+			return err
+		}
 	}
 
 	originalStocks := helpers.SelectUniqueIds(w.sc.Items/10, 1, w.sc.Items)
@@ -96,8 +142,16 @@ func (w *Worker) LoadWarehouse(id int) {
 			}
 		}
 
-		w.ex.SaveBatch(TABLENAME_STOCK, w.generateStock(id, i, isOriginal))
+		err = w.ex.SaveBatch(TABLENAME_STOCK, w.generateStock(id, i, isOriginal))
+		if err != nil {
+			return err
+		}
 	}
 
-	w.ex.Flush(TABLENAME_STOCK)
+	err = w.ex.Flush(TABLENAME_STOCK)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }

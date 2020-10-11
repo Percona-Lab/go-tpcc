@@ -22,9 +22,9 @@ func (w* Worker) generateCustomer(cId int, cWId int, cDId int, isBadCredit bool)
 		// https://github.com/pingcap/go-tpc/blob/6eb40da50d66c776540184607442214bfcd824dd/tpcc/rand.go#L114
 		sylN = (helpers.RandInt(0, 256)|helpers.RandInt(0,1000)+helpers.RandInt(0,256))%1000
 	}
-	lastName = SYLLABES[sylN/100] +
-		SYLLABES[(sylN/10)%10] +
-		SYLLABES[sylN%10]
+	lastName = SYLLABLES[sylN/100] +
+		SYLLABLES[(sylN/10)%10] +
+		SYLLABLES[sylN%10]
 
 	address_ := w.generateRandomAddress()
 

@@ -29,6 +29,8 @@ var runCmd = &cobra.Command{
 		rf_, _ := cmd.PersistentFlags().GetString("report-format")
 		perc, _ := cmd.PersistentFlags().GetInt("percentile")
 		percfail, _ := cmd.PersistentFlags().GetInt("percent-fail")
+		dbdriver, _ := cmd.Root().PersistentFlags().GetString("dbdriver")
+
 
 		if perc > 100 || perc < 0 {
 			panic("percentile not correct")
@@ -57,6 +59,7 @@ var runCmd = &cobra.Command{
 			go func(i int) {
 
 				conf := tpcc.Configuration{
+					DBDriver: 		dbdriver,
 					DBName:         dbname,
 					Threads:        threads,
 					WriteConcern:   0,

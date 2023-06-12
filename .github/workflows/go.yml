@@ -24,8 +24,8 @@ jobs:
     
     - name: Workaround for the empty username issue
       run: |
-        mkdir -p /home/runner/go/src/github.com/Percona-Lab/go-tpcc
-        cp -Rv /home/runner/work/go-tpcc/go-tpcc /home/runner/go/src/github.com/Percona-Lab
+        mkdir -p /home/runner/go/src/github.com/slocke716/go-tpcc
+        cp -Rv /home/runner/work/go-tpcc/go-tpcc /home/runner/go/src/github.com/slocke716
 
     - name: Get dependencies
       run: |
@@ -82,6 +82,6 @@ jobs:
         platforms: linux/amd64
         push: true
         tags: |
-          docker.pkg.github.com/percona-lab/go-tpcc/go-tpcc:latest
-          docker.pkg.github.com/percona-lab/go-tpcc/go-tpcc:${{ steps.get_version.outputs.VERSION }}
+          docker.pkg.github.com/slocke716/go-tpcc/go-tpcc:latest
+          docker.pkg.github.com/slocke716/go-tpcc/go-tpcc:${{ steps.get_version.outputs.VERSION }}
           

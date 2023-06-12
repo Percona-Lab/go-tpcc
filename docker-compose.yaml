@@ -1,0 +1,11 @@
+version: '3.9'
+services:
+  tpcc:
+    platform: linux/amd64
+    image: "${REPOSITORY}/${CONTAINER_NAME}:${VERSION}"
+    build:
+      context: ./
+      dockerfile: ./Dockerfile
+    environment:
+      - VERSION=$VERSION
+      - IN_DOCKER=true
